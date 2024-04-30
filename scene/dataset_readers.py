@@ -224,33 +224,38 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")
+    # 读取训练集相机信息
     train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
     print("Reading Test Transforms")
+    # 读取测试集相机信息
     test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
-    
+    # 如果不是评估模式，则将测试集相机信息合并到训练集中，测试集列表清空
     if not eval:
         train_cam_infos.extend(test_cam_infos)
         test_cam_infos = []
-
+    # 获取NeRF++规范化参数，通常用于标准化相机参数或点云数据
     nerf_normalization = getNerfppNorm(train_cam_infos)
-
+    # 构造点云文件路径
     ply_path = os.path.join(path, "points3d.ply")
+    # 如果点云文件不存在，生成一个随机点云
     if not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
         
         # We create random points inside the bounds of the synthetic Blender scenes
+        # 创建随机点云数据
         xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
         shs = np.random.random((num_pts, 3)) / 255.0
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
-
+        # 存储点云文件
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    # 尝试加载点云文件，如果失败则设置为 None
     try:
         pcd = fetchPly(ply_path)
     except:
         pcd = None
-
+    # 创建 SceneInfo 对象，保存场景相关信息
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
                            test_cameras=test_cam_infos,

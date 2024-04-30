@@ -123,35 +123,47 @@ class GaussianModel:
         return self.opacity_activation(self._opacity)
     
     def get_covariance(self, scaling_modifier = 1):
+        '''用于计算模型中高斯点的协方差'''
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
     def oneupSHdegree(self):
+        '''用于增加模型中使用的球谐函数的阶数，直到达到预设的最大阶数'''
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
 
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
+        # 设置空间学习率缩放因子
         self.spatial_lr_scale = spatial_lr_scale
+        # 将点云数据转换为 PyTorch 张量，并移至 CUDA 设备上进行加速处理
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        # 将点云的颜色数据转换为球谐函数表示，这一步涉及颜色空间的转换，可能是为了更好地处理光照变化
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        # 初始化特征张量，用于存储转换后的颜色数据和其他可能的几何信息
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
+        # 将转换后的颜色数据放入特征张量的对应位置
         features[:, :3, 0 ] = fused_color
+        # 其余特征初始化为0
         features[:, 3:, 1:] = 0.0
 
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
-
+        # 计算点云中点的距离，并应用平方根和对数变换以生成缩放参数
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
+        
+        # 初始化旋转参数，所有点初始时不旋转
         rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
-        rots[:, 0] = 1
-
+        rots[:, 0] = 1 # 代表无旋转的四元数
+        # 初始化不透明度参数，使用 inverse_sigmoid 函数以保证初始值合适
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-
+        # 将点云数据和特征标记为可优化参数，以便在模型训练过程中调整
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
         self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        
+        # 初始化2D最大半径数组
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def training_setup(self, training_args):

@@ -43,27 +43,36 @@ class SceneInfo(NamedTuple):
     ply_path: str
 
 def getNerfppNorm(cam_info):
+    # 定义一个内部函数来计算相机中心和场景的对角线长度
     def get_center_and_diag(cam_centers):
+        # 将所有相机中心的坐标堆叠成一个矩阵
         cam_centers = np.hstack(cam_centers)
+        # 计算所有相机中心的平均位置
         avg_cam_center = np.mean(cam_centers, axis=1, keepdims=True)
         center = avg_cam_center
+        # 计算每个相机中心到平均中心的距离
         dist = np.linalg.norm(cam_centers - center, axis=0, keepdims=True)
+        # 找到最大距离，这表示场景的对角线长度
         diagonal = np.max(dist)
-        return center.flatten(), diagonal
+        return center.flatten(), diagonal # 找到最大距离，这表示场景的对角线长度
 
     cam_centers = []
-
+    # 遍历每个相机信息
     for cam in cam_info:
+        # 获取每个相机的世界到视图的变换矩阵
         W2C = getWorld2View2(cam.R, cam.T)
+        # 计算视图到世界的变换矩阵
         C2W = np.linalg.inv(W2C)
+        # 收集每个相机的世界坐标中心
         cam_centers.append(C2W[:3, 3:4])
-
+    # 使用之前定义的函数计算场景中心和对角线长度
     center, diagonal = get_center_and_diag(cam_centers)
+    # 将对角线长度扩大 10% 以确定场景的半径
     radius = diagonal * 1.1
-
+    # 计算平移向量，用于将场景中心移动到原点
     translate = -center
 
-    return {"translate": translate, "radius": radius}
+    return {"translate": translate, "radius": radius} # 返回场景的平移向量和半径
 
 def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
     cam_infos = []

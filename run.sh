@@ -3,4 +3,4 @@
 
 
 # # SIBR 可视化
-/home/nerf/datav/SourceCode/sibr_core/install/bin/SIBR_gaussianViewer_app -m /home/nerf/datav/playground/gaussian-splatting/output/lego
+/home/nerf/datav/SourceCode/sibr_core/install/bin/SIBR_gaussianViewer_app -m /home/nerf/datav/playground/3dgs-annotations/output/lego

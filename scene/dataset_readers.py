@@ -177,46 +177,50 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     return scene_info
 
 def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
-    cam_infos = []
-
+    cam_infos = [] # 初始化一个列表，用于存储解析出的相机信息
+    # 打开并读取JSON文件
     with open(os.path.join(path, transformsfile)) as json_file:
-        contents = json.load(json_file)
-        fovx = contents["camera_angle_x"]
+        contents = json.load(json_file)     # 加载JSON文件内容
+        fovx = contents["camera_angle_x"]   # 从JSON数据中提取相机的水平视场角度
 
-        frames = contents["frames"]
-        for idx, frame in enumerate(frames):
-            cam_name = os.path.join(path, frame["file_path"] + extension)
+        frames = contents["frames"]         # 获取包含所有帧信息的列表
+        for idx, frame in enumerate(frames): # 遍历每一帧
+            cam_name = os.path.join(path, frame["file_path"] + extension) # 构建相机图像的完整路径
 
             # NeRF 'transform_matrix' is a camera-to-world transform
+            # 解析从JSON文件中获取的camera-to-world变换矩阵
             c2w = np.array(frame["transform_matrix"])
             # change from OpenGL/Blender camera axes (Y up, Z back) to COLMAP (Y down, Z forward)
+            # 调整相机坐标轴以符合COLMAP的坐标系统（Y向下，Z向前）
             c2w[:3, 1:3] *= -1
 
             # get the world-to-camera transform and set R, T
+            # 计算world-to-camera的变换矩阵，并提取旋转矩阵R和平移向量T
             w2c = np.linalg.inv(c2w)
-            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code
-            T = w2c[:3, 3]
+            R = np.transpose(w2c[:3,:3])  # R is stored transposed due to 'glm' in CUDA code 旋转矩阵，存储时进行了转置
+            T = w2c[:3, 3]  # 平移向量
 
+            # 读取并处理图像
             image_path = os.path.join(path, cam_name)
             image_name = Path(cam_name).stem
-            image = Image.open(image_path)
-
+            image = Image.open(image_path) # 打开图像文件
+            # 将图像转换为RGBA格式，并转换为numpy数组
             im_data = np.array(image.convert("RGBA"))
-
+            # 根据背景色设置的标志选择背景色
             bg = np.array([1,1,1]) if white_background else np.array([0, 0, 0])
-
+            # 正规化图像数据并应用背景色
             norm_data = im_data / 255.0
             arr = norm_data[:,:,:3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
             image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
-
+            # 计算垂直视场角度
             fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
             FovY = fovy 
             FovX = fovx
-
+            # 将每个相机的信息添加到列表中
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
             
-    return cam_infos
+    return cam_infos # 返回解析和构建的相机信息列表
 
 def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     print("Reading Training Transforms")

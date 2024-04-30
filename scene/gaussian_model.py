@@ -53,18 +53,18 @@ class GaussianModel:
         self.max_sh_degree = sh_degree  # 最大球谐函数阶数
         # 初始化各种属性
         self._xyz = torch.empty(0)              # xyz坐标
-        self._features_dc = torch.empty(0)      # 直流特征
-        self._features_rest = torch.empty(0)    # 其他特征
+        self._features_dc = torch.empty(0)      #TODO 直流特征
+        self._features_rest = torch.empty(0)    #TODO 其他特征
         self._scaling = torch.empty(0)          # 缩放参数
         self._rotation = torch.empty(0)         # 旋转参数
         self._opacity = torch.empty(0)          # 不透明度参数
-        self.max_radii2D = torch.empty(0)       # 2D最大半径
+        self.max_radii2D = torch.empty(0)       #TODO 2D最大半径
         self.xyz_gradient_accum = torch.empty(0)    # xyz梯度累积
-        self.denom = torch.empty(0)             # 归一化因子
+        self.denom = torch.empty(0)             #TODO 归一化因子
         self.optimizer = None                   # 优化器
         self.percent_dense = 0                  # 密度百分比
         self.spatial_lr_scale = 0               # 空间学习率比例
-        self.setup_functions()                  # 调用setup_functions初始化激活函数和其他设置
+        self.setup_functions()                  # 初始化激活函数和其他一些后面用到的函数
 
     def capture(self):
         return (
@@ -285,38 +285,59 @@ class GaussianModel:
             if group["name"] == name:
                 # 获取当前参数的优化状态，如果不存在则返回None
                 stored_state = self.optimizer.state.get(group['params'][0], None)
+                
+                # 初始化优化状态中的梯度平均(exp_avg)和平方梯度平均(exp_avg_sq)为零张量，
+                # 它们的形状与新的张量相同
                 stored_state["exp_avg"] = torch.zeros_like(tensor)
                 stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
 
+                # 删除优化器状态中当前参数的旧状态
                 del self.optimizer.state[group['params'][0]]
+                
+                # 将新的张量封装为nn.Parameter，并设置为需要梯度，
+                # 然后替换原有参数组中对应的参数
                 group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
+                
+                # 将更新后的状态信息重新关联到新的参数上
                 self.optimizer.state[group['params'][0]] = stored_state
-
+                # 将新的参数保存到optimizable_tensors字典中，用其组名作为键
                 optimizable_tensors[group["name"]] = group["params"][0]
-        return optimizable_tensors
+        return optimizable_tensors  # 返回包含已替换参数的字典
 
     def _prune_optimizer(self, mask):
+        # 初始化一个字典，用于存储更新后的参数张量
         optimizable_tensors = {}
+        # 遍历优化器中的所有参数组
         for group in self.optimizer.param_groups:
+            # 获取当前参数的优化状态
             stored_state = self.optimizer.state.get(group['params'][0], None)
+            # 如果存在优化状态，则对状态进行修剪
             if stored_state is not None:
+                # 使用提供的掩码修剪优化器状态中的梯度平均和平方梯度平均
                 stored_state["exp_avg"] = stored_state["exp_avg"][mask]
                 stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
-
+                # 删除当前参数的旧状态
                 del self.optimizer.state[group['params'][0]]
+                # 创建新的参数，将原有参数中有效的部分（根据掩码）重新封装为可训练参数
                 group["params"][0] = nn.Parameter((group["params"][0][mask].requires_grad_(True)))
+                # 更新优化器状态，重新关联修剪后的新参数
                 self.optimizer.state[group['params'][0]] = stored_state
-
+                # 将更新后的参数存储在返回字典中
                 optimizable_tensors[group["name"]] = group["params"][0]
+            # 如果不存在优化状态，直接修剪并更新参数
             else:
                 group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True))
                 optimizable_tensors[group["name"]] = group["params"][0]
-        return optimizable_tensors
+        return optimizable_tensors # 返回包含所有更新后参数的字典
 
     def prune_points(self, mask):
+        '''
+        负责根据提供的掩码修剪（即删除）不再需要的点。这是模型优化的一部分，有助于移除冗余或不符合条件的数据点
+        '''
         valid_points_mask = ~mask
+        # 调用 _prune_optimizer 方法，传入有效点掩码以修剪优化器中的参数
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
-
+        # 更新模型的主要张量属性为修剪后的张量
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
@@ -324,42 +345,56 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
+        # 修剪与点相关的其他属性张量
+        # 梯度累积张量也根据有效点掩码进行修剪
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
-
+        # 归一化因子（denom）和最大半径（max_radii2D）张量也按照相同的掩码进行修剪
         self.denom = self.denom[valid_points_mask]
         self.max_radii2D = self.max_radii2D[valid_points_mask]
 
     def cat_tensors_to_optimizer(self, tensors_dict):
+        # 初始化一个字典，用来存储更新后的参数张量
         optimizable_tensors = {}
+        # 遍历优化器中的所有参数组
         for group in self.optimizer.param_groups:
-            assert len(group["params"]) == 1
+            assert len(group["params"]) == 1 # 确保每个参数组中只有一个参数（这是一个设计前提）
+            # 从输入字典中获取与当前参数组名称相匹配的张量
             extension_tensor = tensors_dict[group["name"]]
+            # 获取当前参数的优化状态
             stored_state = self.optimizer.state.get(group['params'][0], None)
+            # 如果存在优化状态，则更新状态并合并张量
             if stored_state is not None:
-
+                # 更新梯度平均和平方梯度平均状态，添加新张量对应的零初始化部分
                 stored_state["exp_avg"] = torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=0)
                 stored_state["exp_avg_sq"] = torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=0)
 
+                # 删除当前参数的旧状态
                 del self.optimizer.state[group['params'][0]]
+                # 创建新的参数，将旧参数和新张量拼接，并设置为需要梯度
                 group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
+                # 重新设置更新后的参数状态
                 self.optimizer.state[group['params'][0]] = stored_state
-
+                # 将更新后的参数存储在返回字典中
                 optimizable_tensors[group["name"]] = group["params"][0]
+            # 如果不存在优化状态（较不常见），直接创建新的参数并更新
             else:
                 group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
                 optimizable_tensors[group["name"]] = group["params"][0]
 
-        return optimizable_tensors
+        return optimizable_tensors # 返回包含所有更新后参数的字典
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
+        # 将新点的所有相关属性组织成一个字典
         d = {"xyz": new_xyz,
         "f_dc": new_features_dc,
         "f_rest": new_features_rest,
         "opacity": new_opacities,
         "scaling" : new_scaling,
         "rotation" : new_rotation}
-
+        # 将新点的数据添加到优化器中，并获取更新后的张量
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
+        
+        # 更新模型的各个属性，以包括新添加的点
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
         self._features_rest = optimizable_tensors["f_rest"]
@@ -367,66 +402,105 @@ class GaussianModel:
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
 
+        # 重置与这些新点相关的梯度累积和归一化因子
+        # 这确保新点被正确地融入模型的训练过程中，没有过时的梯度信息
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        # 重置最大2D半径数组，为新点计算新的半径值
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
-        n_init_points = self.get_xyz.shape[0]
+        n_init_points = self.get_xyz.shape[0] # 获取初始点的数量
         # Extract points that satisfy the gradient condition
+        # 初始化一个全零的梯度填充张量
         padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[:grads.shape[0]] = grads.squeeze()
+        padded_grad[:grads.shape[0]] = grads.squeeze() # 将实际梯度填充到前部
+        # 根据梯度阈值选择点
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        # 进一步筛选这些点，确保它们的缩放值大于场景范围与密度百分比的乘积
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
-
+        # 计算选中点的标准差，用于后续生成新点
         stds = self.get_scaling[selected_pts_mask].repeat(N,1)
-        means =torch.zeros((stds.size(0), 3),device="cuda")
+        means =torch.zeros((stds.size(0), 3),device="cuda") # 创建均值为0的向量
+        
+        # 生成新点的坐标，基于正态分布随机偏移
         samples = torch.normal(mean=means, std=stds)
+        # 对选中点的旋转参数进行重复，准备应用于新点
         rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
+        # 通过旋转和平移变换生成新点的坐标
         new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
+        # 计算新点的缩放参数
         new_scaling = self.scaling_inverse_activation(self.get_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
+        # 重复旧点的旋转参数
         new_rotation = self._rotation[selected_pts_mask].repeat(N,1)
+        # 重复旧点的特征
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
+        # 重复旧点的不透明度
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
-
+        # 调用后处理函数整合新点
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
-
+        # 创建修剪滤波器，用于移除被替代的旧点
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
+        # 从梯度张量中选出符合梯度阈值条件的点
+        # torch.norm(grads, dim=-1) 计算每个点的梯度的范数
+        # 比较梯度范数是否大于或等于设定的阈值 grad_threshold
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
+        # 进一步筛选符合缩放限制的点，即缩放因子必须小于或等于场景范围乘以密集百分比（percent_dense）
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
-        new_xyz = self._xyz[selected_pts_mask]
-        new_features_dc = self._features_dc[selected_pts_mask]
-        new_features_rest = self._features_rest[selected_pts_mask]
-        new_opacities = self._opacity[selected_pts_mask]
-        new_scaling = self._scaling[selected_pts_mask]
-        new_rotation = self._rotation[selected_pts_mask]
+        # 使用筛选出的掩码获取符合条件的点的属性
+        new_xyz = self._xyz[selected_pts_mask]               # 选出符合条件的坐标
+        new_features_dc = self._features_dc[selected_pts_mask]  # 选出符合条件的直流特征
+        new_features_rest = self._features_rest[selected_pts_mask]  # 选出符合条件的其他特征
+        new_opacities = self._opacity[selected_pts_mask]     # 选出符合条件的不透明度
+        new_scaling = self._scaling[selected_pts_mask]       # 选出符合条件的缩放参数
+        new_rotation = self._rotation[selected_pts_mask]     # 选出符合条件的旋转参数
 
+        # 调用densification_postfix处理复制后的点
+        # 该函数可能涉及将新点添加到模型数据中，进行必要的更新和重新计算
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
+        # 计算梯度，即xyz坐标的梯度累积除以归一化因子
         grads = self.xyz_gradient_accum / self.denom
+        # 修正梯度中的NaN值为0，防止计算错误
         grads[grads.isnan()] = 0.0
-
+        
+        # 调用densify_and_clone方法进行密集化和克隆操作，增加密集度
         self.densify_and_clone(grads, max_grad, extent)
+        # 调用densify_and_split方法进行密集化和分裂操作，进一步优化密集度
         self.densify_and_split(grads, max_grad, extent)
 
+        # 创建修剪掩码，基于不透明度小于最小不透明度阈值的条件
         prune_mask = (self.get_opacity < min_opacity).squeeze()
+        
+        # 如果设置了最大屏幕尺寸限制
         if max_screen_size:
+            # 计算点在视空间中的最大半径是否超过最大屏幕尺寸
             big_points_vs = self.max_radii2D > max_screen_size
+            # 计算点的缩放值是否超过场景范围的10%
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
+            # 更新修剪掩码，包括超过屏幕尺寸和缩放尺寸的点
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        # 执行修剪操作，移除不需要的高斯点
         self.prune_points(prune_mask)
-
+        # 清空CUDA缓存，优化内存使用
         torch.cuda.empty_cache()
 
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
+        # 更新xyz_gradient_accum：增加视空间点张量的梯度范数
+        # torch.norm 计算梯度的L2范数，这里只计算前两维（:2），通常对应x和y方向
+        # dim=-1 指定在最后一个维度上计算范数，keepdim=True 保持输出维度与输入一致
+        # update_filter 是一个布尔掩码，指定哪些点的统计信息需要更新
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
+        
+        # 更新denom（归一化分母）：为相应的点增加1
+        # 这是一个简单的计数器，用于后续计算平均梯度或进行其他统计分析
         self.denom[update_filter] += 1

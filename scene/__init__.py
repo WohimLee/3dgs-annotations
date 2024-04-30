@@ -37,7 +37,7 @@ class Scene: # 定义一个类Scene，用来表示和处理3D渲染场景
         self.loaded_iter = None # 初始化加载的迭代次数为None
         self.gaussians = gaussians  # 设置高斯模型
 
-        if load_iteration:  # 如果指定了加载迭代次数
+        if load_iteration:  # 如果指定了加载迭代次数, 默认None, 跳过
             if load_iteration == -1: # 如果加载迭代次数为-1，搜索模型路径下最大迭代次数
                 self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
             else:   # 否则直接使用指定的迭代次数
@@ -51,11 +51,11 @@ class Scene: # 定义一个类Scene，用来表示和处理3D渲染场景
 
         # 检查场景源路径下是否存在'sparse'目录
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            # 如果存在，则假设是使用Colmap数据集，并调用相应的加载函数
+            # 如果存在，则使用 Colmap 数据集设置，并调用相应的加载函数
             scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
         # 检查场景源路径下是否存在'transforms_train.json'文件
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
-            # 如果存在，则假设是使用Blender数据集，并调用相应的加载函数
+            # 如果存在，则使用 Blender 数据集设置，并调用相应的加载函数
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
         else: # 如果两者都不存在，则断言错误，场景类型无法识别

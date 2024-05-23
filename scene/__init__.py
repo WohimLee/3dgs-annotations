@@ -49,6 +49,7 @@ class Scene: # 定义一个类Scene，用来表示和处理3D渲染场景
         self.train_cameras = {}
         self.test_cameras = {}
 
+        # 不同数据集的检测，NeRF还是colmap
         # 检查场景源路径下是否存在'sparse'目录
         if os.path.exists(os.path.join(args.source_path, "sparse")):
             # 如果存在，则使用 Colmap 数据集设置，并调用相应的加载函数
